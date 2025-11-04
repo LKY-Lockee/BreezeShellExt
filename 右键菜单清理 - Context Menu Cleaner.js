@@ -158,7 +158,7 @@ shell.menu_controller.add_menu_listener((ctx) => {
         const mergedMenus = [];
         const mergeMenuItems = (menuItems, newMenuName) => {
             const items = menuItems.filter((menu) => menu);
-            if (items.length >= 1) {
+            if (items.length > 1) {
                 const itemDatas = items.map((v) => v.data());
                 mergedMenus.push({
                     name: newMenuName,
