@@ -195,11 +195,11 @@ shell.menu_controller.add_menu_listener((ctx) => {
                 ctx.menu.get_items().filter((menu) => {
                     const data = menu.data();
                     const blacklist = ["打开方式", "打开方式...", "编辑"];
-                    const blacklistResid = [
-                        "51623@SHELL32.dll", // 打开
-                        "8535@windows.storage.dll", // 在新标签页中打开
-                        "8533@windows.storage.dll", // 在新窗口中打开
-                    ];
+                    // const blacklistResid = [
+                    //     "51623@SHELL32.dll", // 打开
+                    //     "8535@windows.storage.dll", // 在新标签页中打开
+                    //     "8533@windows.storage.dll", // 在新窗口中打开
+                    // ];
                     const whitelist = [
                         // common matches
                         "使用",
@@ -229,7 +229,7 @@ shell.menu_controller.add_menu_listener((ctx) => {
                     if (ignore.includes(data.name)) return false;
                     if (ignoreResid.includes(data.name_resid)) return false;
                     if (blacklist.includes(data.name)) return false;
-                    if (blacklistResid.includes(data.name_resid)) return false;
+                    // if (blacklistResid.includes(data.name_resid)) return false;
                     return (
                         whitelist.some((name) =>
                             data.name?.toLowerCase().includes(name)
