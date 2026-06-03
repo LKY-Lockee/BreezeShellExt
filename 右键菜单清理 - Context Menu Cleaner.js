@@ -1,7 +1,7 @@
 // @name: 右键菜单清理 - Context Menu Cleaner
 // @description: 多功能、可配置的右键菜单清理工具 / A versatile and configurable context menu cleaner
 // @author: MicroBlock
-// @version: 0.0.10
+// @version: 0.0.11
 
 import * as shell from "mshell";
 const ICON_CHECKED = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 12 12"><path fill="currentColor" d="M9.765 3.205a.75.75 0 0 1 .03 1.06l-4.25 4.5a.75.75 0 0 1-1.075.015L2.22 6.53a.75.75 0 0 1 1.06-1.06l1.705 1.704l3.72-3.939a.75.75 0 0 1 1.06-.03"/></svg>`;
@@ -18,6 +18,7 @@ const languages = {
         打开方式: "Open with",
         视图操作: "View operation",
         不常用: "Uncommon",
+        合并重复项: "Merge duplicate items",
         右键菜单清理: "Context Menu Cleaner",
     },
     "ja-JP": {
@@ -30,13 +31,14 @@ const languages = {
         打开方式: "プログラムから開く",
         视图操作: "ビュー操作",
         不常用: "他のメニュー",
+        合并重复项: "重複項目をマージ",
         右键菜单清理: "コンテキスト メニュー クリーナー",
     },
     "zh-CN": {},
 };
 
 const currentLang = Object.keys(languages).includes(
-    shell.breeze.user_language()
+    shell.breeze.user_language(),
 )
     ? shell.breeze.user_language()
     : "en-US";
@@ -50,6 +52,7 @@ const default_config = {
         open_with: true,
         view_operation: true,
         uncommon: true,
+        duplicate_items: true,
     },
 };
 let config = {};
@@ -131,17 +134,18 @@ on_plugin_menu["右键菜单清理 - Context Menu Cleaner"] = (menu) => {
             createToggleMenu(
                 submenu,
                 t("不合并使用 Code 打开"),
-                "merge.open_with_allow.code"
+                "merge.open_with_allow.code",
             );
             createToggleMenu(
                 submenu,
                 t("不合并在终端中打开"),
-                "merge.open_with_allow.terminal"
+                "merge.open_with_allow.terminal",
             );
-        }
+        },
     );
     createToggleMenu(menu, t("合并视图操作"), "merge.view_operation");
     createToggleMenu(menu, t("合并不常用菜单"), "merge.uncommon");
+    createToggleMenu(menu, t("合并重复项"), "merge.duplicate_items");
 };
 
 shell.menu_controller.add_menu_listener((ctx) => {
@@ -187,14 +191,14 @@ shell.menu_controller.add_menu_listener((ctx) => {
                     "Open in Terminal",
                     "Windows Terminal here",
                     "Windows Terminal here as administrator",
-                    "Windows ターミナルで聞く"
+                    "Windows ターミナルで聞く",
                 );
             }
 
             mergeMenuItems(
                 ctx.menu.get_items().filter((menu) => {
                     const data = menu.data();
-                    const blacklist = ["打开方式", "打开方式...", "编辑"];
+                    const blacklist = ["打开方式", "打开方式..."];
                     // const blacklistResid = [
                     //     "51623@SHELL32.dll", // 打开
                     //     "8535@windows.storage.dll", // 在新标签页中打开
@@ -209,6 +213,8 @@ shell.menu_controller.add_menu_listener((ctx) => {
                         "open",
                         "here",
                         "打开",
+                        "打印",
+                        "编辑",
                         // specific softwares
                         "adobe bridge",
                         "adobe acrobat",
@@ -232,15 +238,15 @@ shell.menu_controller.add_menu_listener((ctx) => {
                     // if (blacklistResid.includes(data.name_resid)) return false;
                     return (
                         whitelist.some((name) =>
-                            data.name?.toLowerCase().includes(name)
+                            data.name?.toLowerCase().includes(name),
                         ) ||
                         fullmatch.some((name) => data.name === name) ||
                         fullmatchResid.some(
-                            (resid) => data.name_resid === resid
+                            (resid) => data.name_resid === resid,
                         )
                     );
                 }),
-                t("打开方式")
+                t("打开方式"),
             );
         }
 
@@ -265,11 +271,11 @@ shell.menu_controller.add_menu_listener((ctx) => {
                     return (
                         fullmatch.some((name) => name === data.name) ||
                         fullmatchResid.some(
-                            (resid) => data.name_resid === resid
+                            (resid) => data.name_resid === resid,
                         )
                     );
                 }),
-                t("视图操作")
+                t("视图操作"),
             );
         }
 
@@ -311,12 +317,12 @@ shell.menu_controller.add_menu_listener((ctx) => {
                     return (
                         fullmatch.some((name) => data.name === name) ||
                         fullmatchResid.some(
-                            (resid) => data.name_resid === resid
+                            (resid) => data.name_resid === resid,
                         ) ||
                         partial.some((name) => data.name?.includes(name))
                     );
                 }),
-                t("不常用")
+                t("不常用"),
             );
         }
 
@@ -324,7 +330,7 @@ shell.menu_controller.add_menu_listener((ctx) => {
         if (mergedMenus.length) {
             for (const menu of ctx.menu.get_items()) {
                 const dupname = mergedMenus.find(
-                    (v) => v.name === menu.data().name
+                    (v) => v.name === menu.data().name,
                 );
                 if (dupname) {
                     const orig_submenu = menu.data().submenu;
@@ -353,15 +359,58 @@ shell.menu_controller.add_menu_listener((ctx) => {
             }
         }
 
-        // merge duplicate spacer
+        // merge duplicate items (keep first occurrence, remove rest)
+        // Also wraps submenu callbacks so dedup works recursively on lazy submenus
+        if (read_config_key("merge.duplicate_items")) {
+            const deduplicateItems = (menuController) => {
+                const seenNames = new Set();
+                const items = menuController.get_items();
+                for (const item of items) {
+                    const data = item.data();
+                    if (data.type === "spacer" || !data.name) {
+                        // Still need to wrap submenus even for items we don't dedup by name
+                        if (data.submenu) {
+                            const orig = data.submenu;
+                            item.update_data({
+                                submenu: (sub) => {
+                                    orig(sub);
+                                    deduplicateItems(sub);
+                                },
+                            });
+                        }
+                        continue;
+                    }
+                    if (seenNames.has(data.name)) {
+                        item.remove();
+                        continue;
+                    }
+                    seenNames.add(data.name);
+
+                    // Wrap submenu callback for recursive dedup
+                    if (data.submenu) {
+                        const orig = data.submenu;
+                        item.update_data({
+                            submenu: (sub) => {
+                                orig(sub);
+                                deduplicateItems(sub);
+                            },
+                        });
+                    }
+                }
+            };
+            deduplicateItems(ctx.menu);
+        }
+
+        // merge duplicate spacer (re-fetch items to get latest state)
+        const currentItems = ctx.menu.get_items();
         let is_last_spacer = false;
-        for (let index = 0; index < items.length; index++) {
-            const element = items[index];
+        for (let index = 0; index < currentItems.length; index++) {
+            const element = currentItems[index];
             if (element.data().type === "spacer") {
                 if (
                     is_last_spacer ||
                     index === 0 ||
-                    index === items.length - 1
+                    index === currentItems.length - 1
                 ) {
                     element.remove();
                 }
