@@ -162,7 +162,7 @@ shell.menu_controller.add_menu_listener((ctx) => {
         const mergedMenus = [];
         const mergeMenuItems = (menuItems, newMenuName) => {
             const items = menuItems.filter((menu) => menu);
-            if (items.length > 1) {
+            if (items.length >= 1) {
                 const itemDatas = items.map((v) => v.data());
                 mergedMenus.push({
                     name: newMenuName,
@@ -215,6 +215,8 @@ shell.menu_controller.add_menu_listener((ctx) => {
                         "打开",
                         "打印",
                         "编辑",
+                        "以管理员身份运行",
+                        "以其他用户身份运行",
                         // specific softwares
                         "adobe bridge",
                         "adobe acrobat",
@@ -256,6 +258,7 @@ shell.menu_controller.add_menu_listener((ctx) => {
                     const data = menu.data();
                     const fullmatch = [
                         // zh-CN
+                        "查看",
                         "排序方式",
                         "分组依据",
                         // en-US
@@ -275,7 +278,7 @@ shell.menu_controller.add_menu_listener((ctx) => {
                         )
                     );
                 }),
-                t("视图操作"),
+                t("视图"),
             );
         }
 
