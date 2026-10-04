@@ -312,18 +312,7 @@ const processMenu = (menuController) => {
         }
     }
 
-    // ---- Step 4: Apply renames ----
-    for (const item of menuController.get_items()) {
-        const data = item.data();
-        if (data.name && renames.has(data.name)) {
-            const newName = renames.get(data.name);
-            if (newName !== data.name) {
-                item.update_data({ name: newName });
-            }
-        }
-    }
-
-    // ---- Step 5: Insert spacers per config (after sorting, before dedup) ----
+    // ---- Step 4: Insert spacers per config (after sorting, before dedup) ----
     // Walks the ENTIRE config tree recursively so nested nodes (inside
     // above/below) are also processed. Collects all positions first, then
     // inserts from highest to lowest to avoid index shift interference.
@@ -401,6 +390,17 @@ const processMenu = (menuController) => {
             { type: "spacer", disabled: true },
             pos,
         );
+    }
+
+    // ---- Step 5: Apply renames (after all name-based matching) ----
+    for (const item of menuController.get_items()) {
+        const data = item.data();
+        if (data.name && renames.has(data.name)) {
+            const newName = renames.get(data.name);
+            if (newName !== data.name) {
+                item.update_data({ name: newName });
+            }
+        }
     }
 
     // ---- Step 6: Recurse into submenus ----
