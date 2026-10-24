@@ -1,6 +1,6 @@
 // @name: 菜单排序与重命名 - Menu Order & Rename
 // @description: 自定义菜单项顺序与名称，通过 JSON 配置文件控制 / Reorder and rename menu items via JSON config
-// @version: 0.3.0
+// @version: 0.4.1
 // @author: LKY-Lockee
 
 import * as shell from "mshell";
@@ -10,18 +10,23 @@ const PLUGIN_NAME = "菜单排序与重命名 - Menu Order & Rename";
 
 // ---- Config format (menu-order.json) ----
 // Key = menu item name (exact match)
-// Value = { name?: string, above?: {...}, below?: {...}, spacer?: string[] }
+// Value = { name?: string, above?: {...}, below?: {...}, spacer?: string[], position?: "top" | "bottom" }
 //   - name: new display name (omit to keep original)
 //   - above: items to place above this item, with their own sub-configs
 //   - below: items to place below this item, with their own sub-configs
 //   - spacer: where to insert separators. Array of: "before", "after",
 //     "before-above", "after-below". Runs after sorting, before dedup.
+//   - position: "top" or "bottom" moves this item, together with its
+//     above/below items, as far to the top/bottom of the menu as possible.
+//     Multiple items with the same position keep their config order.
+//     Nested entries are supported; on conflict, config-tree order wins.
 //   - {} means: just a positioning anchor / ordering reference
 //
 // Root keys themselves are NOT reordered — they stay where they are.
 // Only their above/below children are repositioned relative to them.
 // If a root key doesn't exist in the menu, its above/below items still
 // maintain their configured relative order (floating group).
+// The above still applies; use position if you want to move a root key too.
 //
 // Example:
 // {
@@ -30,7 +35,9 @@ const PLUGIN_NAME = "菜单排序与重命名 - Menu Order & Rename";
 //     },
 //     "打开": {
 //         "below": { "编辑": {}, "打印": {} }
-//     }
+//     },
+//     "复制文件路径": { "position": "top" },
+//     "更多...": { "position": "bottom", "name": "更多" }
 // }
 
 let config = {};
@@ -88,7 +95,12 @@ on_plugin_menu[PLUGIN_NAME] = (menu) => {
             const belowCount = cfg.below ? Object.keys(cfg.below).length : 0;
             const hint =
                 (aboveCount ? " ↑" + aboveCount : "") +
-                (belowCount ? " ↓" + belowCount : "");
+                (belowCount ? " ↓" + belowCount : "") +
+                (cfg.position === "top"
+                    ? " [top]"
+                    : cfg.position === "bottom"
+                      ? " [bottom]"
+                      : "");
             menu.append_menu({
                 name: key + renameInfo + hint,
                 disabled: true,
@@ -312,10 +324,59 @@ const processMenu = (menuController) => {
         }
     }
 
-    // ---- Step 4: Insert spacers per config (after sorting, before dedup) ----
+    // ---- Step 4: Apply explicit top/bottom positions ----
+    // Runs after above/below placement so the whole group moves together,
+    // and before spacers so their positions follow the moved items.
+    const positioned = new Set();
+    const positionDirectives = [];
+    walkConfigTree(config, (key, cfg) => {
+        if (cfg.position === "top" || cfg.position === "bottom") {
+            positionDirectives.push({ key, cfg, position: cfg.position });
+        }
+    });
+
+    const buildPositionGroup = (key, cfg) => {
+        const items = menuController.get_items();
+        const names = [...expandAbove(cfg), key, ...expandBelow(cfg)];
+        const seen = new Set();
+        return names.filter((n) => {
+            if (seen.has(n) || positioned.has(n)) return false;
+            seen.add(n);
+            return items.some((it) => it.data().name === n);
+        });
+    };
+
+    // Single pass in config order. Top groups are placed sequentially from
+    // index 0, bottom groups are appended sequentially, so config order is
+    // kept for both and overlapping configs resolve in config-tree order.
+    let topOffset = 0;
+    for (const { key, cfg, position } of positionDirectives) {
+        const group = buildPositionGroup(key, cfg);
+        if (position === "top") {
+            for (let i = 0; i < group.length; i++) {
+                const it = menuController
+                    .get_items()
+                    .find((x) => x.data().name === group[i]);
+                if (it) it.set_position(topOffset + i);
+            }
+            topOffset += group.length;
+        } else {
+            for (const name of group) {
+                const it = menuController
+                    .get_items()
+                    .find((x) => x.data().name === name);
+                if (it) it.set_position(menuController.get_items().length - 1);
+            }
+        }
+        for (const name of group) positioned.add(name);
+    }
+
+    // ---- Step 5: Insert spacers per config (after sorting, before dedup) ----
     // Walks the ENTIRE config tree recursively so nested nodes (inside
     // above/below) are also processed. Collects all positions first, then
     // inserts from highest to lowest to avoid index shift interference.
+    // The anchor may be absent (floating group); in that case spacer
+    // positions are computed from the existing above/below items.
     const spacerInserts = [];
     const collectSpacerInserts = (cfgObj) => {
         if (!cfgObj || typeof cfgObj !== "object") return;
@@ -328,45 +389,52 @@ const processMenu = (menuController) => {
                 cfg.spacer.length > 0
             ) {
                 const items = menuController.get_items();
-                const anchor = items.find((it) => it.data().name === key);
-                if (anchor) {
-                    const anchorPos = anchor.get_position();
-                    const existingAbove = expandAbove(cfg).filter((n) =>
-                        items.some((it) => it.data().name === n),
-                    );
-                    const existingBelow = expandBelow(cfg).filter((n) =>
-                        items.some((it) => it.data().name === n),
-                    );
+                const findPos = (name) => {
+                    const it = items.find((x) => x.data().name === name);
+                    return it ? it.get_position() : -1;
+                };
 
+                const anchorPos = findPos(key);
+                const existingAbove = expandAbove(cfg).filter(
+                    (n) => findPos(n) >= 0,
+                );
+                const existingBelow = expandBelow(cfg).filter(
+                    (n) => findPos(n) >= 0,
+                );
+                const group = [...existingAbove, ...existingBelow];
+                const groupStart = group.length ? findPos(group[0]) : -1;
+                const groupEnd = group.length
+                    ? findPos(group[group.length - 1])
+                    : -1;
+
+                if (anchorPos >= 0 || group.length > 0) {
                     for (const sp of cfg.spacer) {
                         let pos = -1;
                         if (sp === "before") {
-                            pos = anchorPos;
+                            pos = anchorPos >= 0 ? anchorPos : groupStart;
                         } else if (sp === "after") {
-                            pos = anchorPos + 1;
+                            if (anchorPos >= 0) {
+                                pos = anchorPos + 1;
+                            } else if (groupEnd >= 0) {
+                                pos = groupEnd + 1;
+                            }
                         } else if (sp === "before-above") {
                             if (existingAbove.length > 0) {
-                                const firstAbove = items.find(
-                                    (it) => it.data().name === existingAbove[0],
-                                );
-                                pos = firstAbove
-                                    ? firstAbove.get_position()
-                                    : anchorPos;
-                            } else {
+                                pos = findPos(existingAbove[0]);
+                            } else if (anchorPos >= 0) {
                                 pos = anchorPos;
+                            } else {
+                                pos = groupStart;
                             }
                         } else if (sp === "after-below") {
                             if (existingBelow.length > 0) {
-                                const lastBelow = items.find(
-                                    (it) =>
-                                        it.data().name ===
-                                        existingBelow[existingBelow.length - 1],
-                                );
-                                pos = lastBelow
-                                    ? lastBelow.get_position() + 1
-                                    : anchorPos + 1;
-                            } else {
+                                const lastBelow =
+                                    existingBelow[existingBelow.length - 1];
+                                pos = findPos(lastBelow) + 1;
+                            } else if (anchorPos >= 0) {
                                 pos = anchorPos + 1;
+                            } else if (groupEnd >= 0) {
+                                pos = groupEnd + 1;
                             }
                         }
                         if (pos >= 0) {
@@ -392,7 +460,7 @@ const processMenu = (menuController) => {
         );
     }
 
-    // ---- Step 5: Apply renames (after all name-based matching) ----
+    // ---- Step 6: Apply renames (after all name-based matching) ----
     for (const item of menuController.get_items()) {
         const data = item.data();
         if (data.name && renames.has(data.name)) {
@@ -403,7 +471,7 @@ const processMenu = (menuController) => {
         }
     }
 
-    // ---- Step 6: Recurse into submenus ----
+    // ---- Step 7: Recurse into submenus ----
     for (const item of menuController.get_items()) {
         const data = item.data();
         if (data.submenu) {
@@ -412,7 +480,7 @@ const processMenu = (menuController) => {
         }
     }
 
-    // ---- Step 7: Clean up spacers (leading, trailing, and consecutive dupes) ----
+    // ---- Step 8: Clean up spacers (leading, trailing, and consecutive dupes) ----
     // Remove leading spacers
     while (true) {
         const items = menuController.get_items();
